@@ -24,4 +24,3 @@
 - Resolve all paths relative to repo root.
 - Forbid paths that escape the repo (no `..` outside root).
 - Return readable error messages instead of raising exceptions.
-
