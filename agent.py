@@ -53,6 +53,12 @@ def call_llm(question: str) -> str:
         print(f"Unexpected LLM response format: {exc}", file=sys.stderr)
         sys.exit(1)
 
+def format_result(answer_text: str) -> Dict[str, Any]:
+    return {
+        "answer": answer_text,
+        "tool_calls": [],
+    }
+
 
 def main() -> None:
     if len(sys.argv) < 2:
@@ -62,10 +68,7 @@ def main() -> None:
     question = sys.argv[1]
     answer_text = call_llm(question)
 
-    result: Dict[str, Any] = {
-        "answer": answer_text,
-        "tool_calls": [],
-    }
+    result = format_result(answer_text)
 
     json.dump(result, sys.stdout, ensure_ascii=False)
     sys.stdout.write("\n")
