@@ -1,31 +1,27 @@
 # Task 2 plan — Documentation Agent
 
-## Tools and schemas
+## Tools
 
 - Implement two tools in `agent.py`:
-  - `list_files(path: str)` → newline-separated list of entries.
+  - `list_files(path: str)` → newline-separated listing.
   - `read_file(path: str)` → file contents or error string.
-- Define OpenAI-style tool schemas in the LLM request:
-  - `{"type": "function", "function": {"name": "list_files", "parameters": {...}}}`
-  - `{"type": "function", "function": {"name": "read_file", "parameters": {...}}}`
+- Expose them as OpenAI function-calling tools:
+  - `tools = [{"type": "function", "function": {"name": "list_files", ...}}, ...]`.
 
 ## Agentic loop
 
-- Send initial messages: system + user, plus tool definitions.
-- While tool calls exist and count < 10:
-  - Parse `tool_calls` from LLM response.
-  - For each tool call:
-    - Execute `list_files` or `read_file`.
-    - Append a `tool` role message with the result.
-  - Call the LLM again with updated messages.
-- When response has only a normal `assistant` message:
-  - Extract `answer` text and `source` (path + section anchor).
-  - Return JSON with `answer`, `source`, `tool_calls`.
+- Build initial messages: system prompt + user question.
+- Call the LLM with tools enabled.
+- If response has `tool_calls`:
+  - Execute each tool.
+  - Append `tool` role messages with results.
+  - Repeat up to 10 iterations.
+- If response has only assistant message:
+  - Treat it as final answer, extract `answer` and `source`.
 
 ## Path security
 
-- Resolve all paths relative to repo root with `Path().resolve()`.
-- Reject any path that escapes the project root:
-  - If `resolved_path.is_relative_to(repo_root)` is false → return an error string.
-- For `list_files`, if path is a file or missing → return a readable error string instead of raising.
+- Resolve all paths relative to repo root.
+- Forbid paths that escape the repo (no `..` outside root).
+- Return readable error messages instead of raising exceptions.
 
