@@ -3,6 +3,7 @@ import os
 import sys
 from pathlib import Path
 from typing import Any, Dict, List
+from urllib.parse import urljoin
 
 import requests
 
@@ -23,6 +24,15 @@ def load_llm_config() -> Dict[str, str]:
         sys.exit(1)
 
     return {"api_key": api_key, "api_base": api_base, "model": model}
+
+
+def load_api_config() -> Dict[str, str]:
+    base_url = os.getenv("AGENT_API_BASE_URL", "http://localhost:42002")
+    api_key = os.getenv("LMS_API_KEY")
+    if not api_key:
+        print("Missing LMS_API_KEY in environment", file=sys.stderr)
+        sys.exit(1)
+    return {"base_url": base_url.rstrip("/"), "api_key": api_key}
 
 
 def safe_resolve(path: str) -> Path:
@@ -63,6 +73,59 @@ def tool_read_file(path: str) -> str:
     return target.read_text(encoding="utf-8", errors="replace")
 
 
+def tool_query_api(method: str, path: str, body: str | None = None) -> str:
+    cfg = load_api_config()
+    url = urljoin(cfg["base_url"] + "/", path.lstrip("/"))
+
+    headers = {
+        "Authorization": f"Bearer {cfg['api_key']}",
+        "Content-Type": "application/json",
+    }
+
+    data = None
+    if body:
+        try:
+            data = json.loads(body)
+        except json.JSONDecodeError:
+            return json.dumps(
+                {
+                    "status_code": 0,
+                    "body": f"Error: invalid JSON body: {body}",
+                }
+            )
+
+    try:
+        resp = requests.request(
+            method=method.upper(),
+            url=url,
+            headers=headers,
+            json=data,
+            timeout=10,
+        )
+    except requests.RequestException as exc:
+        return json.dumps(
+            {
+                "status_code": 0,
+                "body": f"Error: request failed: {exc}",
+            }
+        )
+
+    try:
+        if resp.headers.get("content-type", "").startswith("application/json"):
+            parsed_body: Any = resp.json()
+        else:
+            parsed_body = resp.text
+    except Exception:
+        parsed_body = resp.text
+
+    return json.dumps(
+        {
+            "status_code": resp.status_code,
+            "body": parsed_body,
+        }
+    )
+
+
 def get_tool_schemas() -> List[Dict[str, Any]]:
     return [
         {
@@ -96,6 +159,34 @@ def get_tool_schemas() -> List[Dict[str, Any]]:
                         }
                     },
                     "required": ["path"],
+                },
+            },
+        },
+        {
+            "type": "function",
+            "function": {
+                "name": "query_api",
+                "description": (
+                    "Call the deployed backend HTTP API. Use this for live data questions "
+                    "(counts, scores, analytics, statuses). Returns JSON with status_code and body."
+                ),
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "method": {
+                            "type": "string",
+                            "description": "HTTP method such as GET, POST, etc.",
+                        },
+                        "path": {
+                            "type": "string",
+                            "description": "Relative API path such as '/items/' or '/analytics/completion-rate'.",
+                        },
+                        "body": {
+                            "type": "string",
+                            "description": "Optional JSON request body as a string.",
+                        },
+                    },
+                    "required": ["method", "path"],
                 },
             },
         },
@@ -133,11 +224,12 @@ def run_doc_agent(question: str) -> Dict[str, Any]:
         {
             "role": "system",
             "content": (
-                "You are a documentation agent that answers questions using the project wiki. "
-                "Use the `list_files` tool to discover files (for example under the 'wiki' directory), "
-                "then use the `read_file` tool to read relevant files. "
-                "When you answer, always include a source path with section anchor like "
-                "'wiki/git-workflow.md#resolving-merge-conflicts'."
+                "You are a documentation and system agent for this LMS project. "
+                "Use list_files and read_file to navigate the wiki and source code. "
+                "Use query_api to call the deployed backend for live data (counts, analytics, statuses). "
+                "For static framework/port/status-code questions, prefer reading the wiki or source code. "
+                "When you answer, include a source path with section anchor when it comes from docs, "
+                "or mention that the answer comes from the live API when using query_api."
             ),
         },
         {"role": "user", "content": question},
@@ -164,6 +256,12 @@ def run_doc_agent(question: str) -> Dict[str, Any]:
                     result_text = tool_list_files(args.get("path", ""))
                 elif func_name == "read_file":
                     result_text = tool_read_file(args.get("path", ""))
+                elif func_name == "query_api":
+                    result_text = tool_query_api(
+                        method=args.get("method", "GET"),
+                        path=args.get("path", "/"),
+                        body=args.get("body"),
+                    )
                 else:
                     result_text = f"Error: unknown tool '{func_name}'"
 
@@ -186,10 +284,7 @@ def run_doc_agent(question: str) -> Dict[str, Any]:
 
             continue
 
-        # финальный ответ без tool_calls
-        answer_text = message.get("content", "")
-        # LLM должен явно указать source в тексте; здесь просто оставляем поле,
-        # модель может вернуть его отдельным ключом в message, но это зависит от настройки
+        answer_text = message.get("content") or ""
         source = ""
         if isinstance(message.get("source"), str):
             source = message["source"]
