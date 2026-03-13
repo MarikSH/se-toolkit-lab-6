@@ -5,6 +5,7 @@ description = "Learning Management Service"
 readme = "README.md"
 requires-python = "==3.14.2"
 dependencies = [
+  "requests",
   "asyncpg>=0.30.0",
   "fastapi==0.128.7",
   "httpx==0.28.1",
